@@ -127,6 +127,60 @@ by
       apply Result.map (AtomicMorphism.compose f1 f2 a b)
       apply Morphism.List
 
+#check @Category.id
+#check Category.comp
+
+mutual
+
+partial def match_morphism_dom_eq_cod (X: Q($C)) (f:Q($X ⟶  $X)) :
+  CatM (@Result _ q($X ⟶  $X) (@Morphism _ _ C CatC X X) f) := do
+
+  match f with
+  | ~q(𝟙 _) => do
+    return {expr := q(𝟙 $X), val := Morphism.Id X, proof := q(by rfl)}
+  | _ => throwError "unimplemented"
+
+-- patern match a morphism different to the identity morphism
+partial def match_morphism (X Y: Q($C)) (f:Q($X ⟶  $Y)) :
+  CatM (@Result _ q($X ⟶  $Y) (@Morphism _ _ C CatC X Y) f) := do
+
+  let type_f : Q($C) := q($Y)
+
+  let ~q($X) := type_f | throwError ""
+
+  have : Q($X = $Y) := q(by simp [*])
+
+  throwError ""
 
 end
+
+end
+
+#check @Category.Hom
+#check whnf
+#check match_morphism_dom_eq_cod
+partial def match_morphism_equality (mvarid:MVarId) : CatM Unit := do
+  let type_eq : Q(Prop) ← mvarid.getType
+  match type_eq with
+  | ~q($f = $g) => do
+    let type_fg ← whnf <| ← inferType f
+    -- $f and $g are morphism of type $type_f, $type_f have type Type v
+    let .sort (.succ v) ← whnf (← inferType type_fg) | throwError "not a type"
+
+    have type_fg : Q(Type v) := type_fg
+    have f : Q($type_fg) := f
+    have g : Q($type_fg) := g
+
+
+    let ~q(@Category.Hom $C $CatC $X $X) := type_fg | throwError "not a morphism"
+
+    let .sort (.succ u) ← whnf (← inferType C) | throwError "a category shound be a type"
+
+    let f_morphism ← @match_morphism_dom_eq_cod u v C CatC X f
+    let g_morphism ← @match_morphism_dom_eq_cod u v C CatC X g
+
+    if ← isDefEq f_morphism.expr g_morphism.expr then
+      return ()
+
+    return ()
 end Cat
