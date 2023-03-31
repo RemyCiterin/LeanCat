@@ -1,5 +1,4 @@
 import Qq
-
 import Lean
 
 import Category.Basic
@@ -25,6 +24,9 @@ def Result.map {α:Q(Type u)} {E:Q($α) → Type} {e: Q($α)}
   expr  := r.expr
   val   := f r.val
   proof := r.proof
+
+instance [Inhabited (Σ e, E e)] : Inhabited (Result E e) :=
+  let ⟨e', v⟩ : Σ e, E e := default; ⟨e', v, default⟩
 
 namespace Cat
 
@@ -70,6 +72,13 @@ inductive Morphism : ∀ X Y:Q($C), Q($X ⟶  $Y) → Type where
 | Id   : ∀ X: Q($C), Morphism X X q(𝟙 $X)
 | List : ∀ {X Y}, ∀ f, AtomicMorphism X Y f → Morphism X Y f
 
+instance {X Y:Q($C)} {f:Q($X ⟶  $Y)} : Inhabited (@Morphism u v C CatC X Y f) where
+  default := Morphism.List f <| AtomicMorphism.Nil <| Atom.Const X Y f 0
+
+instance {X Y:Q($C)} : Inhabited (Σ f, @Morphism u v C CatC X Y f) where
+  default := ⟨default, default⟩
+
+
 #check Result
 #check AtomicMorphism
 
@@ -90,8 +99,7 @@ def AtomicMorphism.compose {X Y Z: Q($C)} (f1:Q($Y ⟶  $Z)) (f2:Q($X ⟶  $Y))
       val  := .Cons Z f1 q($r.expr) atom r.val,
       proof:= show Q($f1 ⊚ $expr = ($f1 ⊚ $g1) ⊚ $f2) from q(by
         simp
-        have : $g1 ⊚ $f2 = $expr := $proof
-        rw [this]
+        rw [«$proof»]
       )
     }
 
@@ -129,41 +137,124 @@ by
 
 #check @Category.id
 #check Category.comp
+#check Morphism.compose
 
+
+
+-- \f<< for « and \f>> for »
 mutual
 
 partial def match_morphism_dom_eq_cod (X: Q($C)) (f:Q($X ⟶  $X)) :
   CatM (@Result _ q($X ⟶  $X) (@Morphism _ _ C CatC X X) f) := do
 
   match f with
-  | ~q(𝟙 _) => do
+  | ~q(𝟙 «$X») => do
     return {expr := q(𝟙 $X), val := Morphism.Id X, proof := q(by rfl)}
-  | _ => throwError "unimplemented"
+  | ~q(@Category.comp _ _ _ «$X» _ $g $h) => do
+    let r1 ← @match_morphism_dom_eq_cod X g
+    let r2 ← match_morphism_dom_eq_cod X h
 
--- patern match a morphism different to the identity morphism
+    match (r1, r2) with
+    | (Result.mk g' val_g proof_g, Result.mk h' val_h proof_h) =>
+      match Morphism.compose g' h' val_g val_h with
+      | Result.mk expr val proof =>
+      return {
+        expr := expr, --q($g' ⊚ $h'),
+        val := val,
+        proof := q(by
+          rw [<-«$proof», <-«$proof_g», <-«$proof_h»]
+        )
+      }
+  | ~q(@Category.comp _ _ _ $Y _ $g $h) => do
+    let r1 ← match_morphism Y X g
+    let r2 ← match_morphism X Y h
+
+    match (r1, r2) with
+    | (Result.mk g' val_g proof_g, Result.mk h' val_h proof_h) =>
+      match Morphism.compose g' h' val_g val_h with
+      | Result.mk expr val proof =>
+        return {
+          expr := expr,
+          val := val,
+          proof := q(by
+            rw [<-«$proof», <-«$proof_g», <-«$proof_h»]
+          )
+        }
+  | _ =>
+    let idx ← CatM.add_atom f
+    return Result.Id f <| Morphism.List f <| AtomicMorphism.Nil (Atom.Const X X f idx)
+
+
+
+-- patern match a morphism when the codomain and the domain are distincts
 partial def match_morphism (X Y: Q($C)) (f:Q($X ⟶  $Y)) :
   CatM (@Result _ q($X ⟶  $Y) (@Morphism _ _ C CatC X Y) f) := do
 
-  let type_f : Q($C) := q($Y)
+  match f with
+  | ~q(@Category.comp _ _ _ «$X» _ $g $h) =>
+    let r2 ← match_morphism_dom_eq_cod X h
+    let r1 ← match_morphism X Y g
 
-  let ~q($X) := type_f | throwError ""
+    match (r1, r2) with
+    | (Result.mk g' val_g proof_g, Result.mk h' val_h proof_h) =>
+      match Morphism.compose g' h' val_g val_h with
+      | Result.mk expr val proof =>
+        return {
+          expr := expr,
+          val  := val,
+          proof:= q(by
+            rw [<-«$proof», <-«$proof_g», <-«$proof_h»]
+          )
+        }
+  | ~q(@Category.comp _ _ _ «$Y» _ $g $h) =>
+    let r1 ← match_morphism_dom_eq_cod Y g
+    let r2 ← match_morphism X Y h
 
-  have : Q($X = $Y) := q(by simp [*])
+    match (r1, r2) with
+    | (Result.mk g' val_g proof_g, Result.mk h' val_h proof_h) =>
+      match Morphism.compose g' h' val_g val_h with
+      | Result.mk expr val proof =>
+        return {
+          expr := expr,
+          val  := val,
+          proof:= q(by
+            rw [<-«$proof», <-«$proof_g», <-«$proof_h»]
+          )
+        }
+  | ~q(@Category.comp _ _ _ $Z _ $g $h) =>
+    let r2 ← match_morphism X Z h
+    let r1 ← match_morphism Z Y g
 
-  throwError ""
+    match (r1, r2) with
+    | (Result.mk g' val_g proof_g, Result.mk h' val_h proof_h) =>
+      match Morphism.compose g' h' val_g val_h with
+      | Result.mk expr val proof =>
+        return {
+          expr := expr,
+          val  := val,
+          proof:= q(by
+            rw [<-«$proof», <-«$proof_g», <-«$proof_h»]
+          )
+        }
+  | _ =>
+    let idx ← CatM.add_atom f
+    return Result.Id f <| Morphism.List f <| AtomicMorphism.Nil (Atom.Const X Y f idx)
 
 end
 
 end
 
-#check @Category.Hom
-#check whnf
-#check match_morphism_dom_eq_cod
-partial def match_morphism_equality (mvarid:MVarId) : CatM Unit := do
+def of_eq (_ : (a: R) = c) (_ : b = c) : a = b := by simp only [*]
+
+universe w
+
+abbrev EndoHom (C:Type w) (CatC:Category C) (X:C) := @Category.Hom C CatC X X
+
+partial def match_morphism_equality (mvarid:MVarId) : CatM <| List MVarId := do
   let type_eq : Q(Prop) ← mvarid.getType
   match type_eq with
   | ~q($f = $g) => do
-    let type_fg ← whnf <| ← inferType f
+    let type_fg ← inferType f
     -- $f and $g are morphism of type $type_f, $type_f have type Type v
     let .sort (.succ v) ← whnf (← inferType type_fg) | throwError "not a type"
 
@@ -172,15 +263,58 @@ partial def match_morphism_equality (mvarid:MVarId) : CatM Unit := do
     have g : Q($type_fg) := g
 
 
-    let ~q(@Category.Hom $C $CatC $X $X) := type_fg | throwError "not a morphism"
+    match type_fg with
+    | ~q(EndoHom $C $CatC $X) =>
 
-    let .sort (.succ u) ← whnf (← inferType C) | throwError "a category shound be a type"
+      let .sort (.succ u) ← whnf (← inferType C) | throwError "a category shound be a type"
 
-    let f_morphism ← @match_morphism_dom_eq_cod u v C CatC X f
-    let g_morphism ← @match_morphism_dom_eq_cod u v C CatC X g
+      let type_fg : Q(Type v) := q($X ⟶  $X)
+      have f : Q($type_fg) := f
+      have g : Q($type_fg) := g
 
-    if ← isDefEq f_morphism.expr g_morphism.expr then
-      return ()
+      let ⟨f', vf, pf⟩ ← @match_morphism_dom_eq_cod u v C CatC X f
+      let ⟨g', vg, pg⟩ ← @match_morphism_dom_eq_cod u v C CatC X g
 
-    return ()
+      --throwError "{f'} {g'}"
+
+      if not (← isDefEq f' g') then do
+        throwError "expressions not equal\n{f}\n{g}\n{f'}\n{g'}"
+
+      let pg : Q(«$g» = «$f'») := pg
+      mvarid.assign q(of_eq $pf $pg)
+
+      return []
+
+    | ~q(@Category.Hom $C $CatC $X $Y) =>
+
+      let .sort (.succ u) ← whnf (← inferType C) | throwError "a category shound be a type"
+
+      let type_fg : Q(Type v) := q($X ⟶  $Y)
+      have f : Q($type_fg) := f
+      have g : Q($type_fg) := g
+
+      let ⟨f', vf, pf⟩ ← @match_morphism u v C CatC X Y f
+      let ⟨g', vg, pg⟩ ← @match_morphism u v C CatC X Y g
+
+
+      if not (← isDefEq f' g') then do
+        throwError "expressions not equal\n{f}\n{g}\n{f'}\n{g'}"
+
+      let pg : Q(«$g» = «$f'») := pg
+      mvarid.assign q(of_eq $pf $pg)
+
+      return []
+
+    | _ => throwError "not a morphism"
+  | _ => throwError "not an equality"
+
+elab "reduce_assoc_and_id" : tactic =>
+  withMainContext do
+    liftMetaTactic fun mvarId => do
+      CatM.run (match_morphism_equality mvarId) true
+
 end Cat
+
+example (C:Type u) [Category C] (X Y:C) (f: X ⟶  Y) (g:X ⟶  X) :
+  (f ⊚ 𝟙 X) ⊚ g = 𝟙 Y ⊚ (f ⊚ g) := by reduce_assoc_and_id
+

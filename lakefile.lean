@@ -14,5 +14,5 @@ lean_lib «Category» {
 --  root := `Main
 --}
 
--- require mathlib from git "https://github.com/leanprover-community/mathlib4.git"@"724a444a35a78ce1922f5c3626ff618f50976f62"
+require mathlib from git "https://github.com/leanprover-community/mathlib4.git"@"724a444a35a78ce1922f5c3626ff618f50976f62"
 require Qq from git "https://github.com/gebner/quote4" @ "master"
