@@ -1,4 +1,3 @@
-
 universe u v
 
 /- *** definition of category *** -/

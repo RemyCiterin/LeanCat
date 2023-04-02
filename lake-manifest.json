@@ -56,8 +56,8 @@
     "name": "Unicode",
     "inputRev?": "main"}},
   {"git":
-   {"url": "https://github.com/leanprover/std4",
+   {"url": "https://github.com/leanprover/std4.git",
     "subDir?": null,
-    "rev": "04b3c9831e0c141713a70e68af7e40973ec9a1ff",
+    "rev": "5770b609aeae209cb80ac74655ee8c750c12aabd",
     "name": "std",
-    "inputRev?": "main"}}]}
+    "inputRev?": "5770b609aeae209cb80ac74655ee8c750c12aabd"}}]}
