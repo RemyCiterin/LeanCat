@@ -60,84 +60,61 @@ variable {CatC: Q(Category.{u, v} $C)}
 
 inductive Atom : ∀ X Y: Q($C), Q($X ⟶  $Y) → Type where
 | Const : ∀ X Y: Q($C), ∀ f: Q($X ⟶  $Y), Nat → Atom X Y f
+| Id : ∀ X: Q($C), Atom X X q(𝟙 $X)
 
-inductive AtomicMorphism : ∀ X Y: Q($C), Q($X ⟶  $Y) → Type where
-| Nil : ∀ {X Y f}, Atom X Y f → AtomicMorphism X Y f
+inductive Morphism : ∀ X Y: Q($C), Q($X ⟶  $Y) → Type where
+| Nil : ∀ {X Y f}, Atom X Y f → Morphism X Y f
 | Cons: ∀ {X Z: Q($C)} (Y:Q($C)),
   ∀ f: Q($Y ⟶  $Z), ∀ g: Q($X ⟶  $Y),
-  Atom Y Z f → AtomicMorphism X Y g → AtomicMorphism X Z q($f ⊚ $g)
+  Atom Y Z f → Morphism X Y g → Morphism X Z q($f ⊚ $g)
 
-
-inductive Morphism : ∀ X Y:Q($C), Q($X ⟶  $Y) → Type where
-| Id   : ∀ X: Q($C), Morphism X X q(𝟙 $X)
-| List : ∀ {X Y}, ∀ f, AtomicMorphism X Y f → Morphism X Y f
 
 instance {X Y:Q($C)} {f:Q($X ⟶  $Y)} : Inhabited (@Morphism u v C CatC X Y f) where
-  default := Morphism.List f <| AtomicMorphism.Nil <| Atom.Const X Y f 0
+  default := Morphism.Nil <| Atom.Const X Y f 0
 
 instance {X Y:Q($C)} : Inhabited (Σ f, @Morphism u v C CatC X Y f) where
   default := ⟨default, default⟩
 
 
 #check Result
-#check AtomicMorphism
 
 
-def AtomicMorphism.compose {X Y Z: Q($C)} (f1:Q($Y ⟶  $Z)) (f2:Q($X ⟶  $Y))
-  (l1:AtomicMorphism Y Z f1) (l2:AtomicMorphism X Y f2) :
-    @Result _ q($X ⟶  $Z) (@AtomicMorphism _ _ C CatC X Z) q($f1 ⊚ $f2) :=
-
-  match l1 with
-  | AtomicMorphism.Nil atom => Result.Id q($f1 ⊚ $f2) (.Cons Y f1 f2 atom l2)
-  | .Cons Z f1 g1 atom l1 =>
-  by
-    let r := compose g1 f2 l1 l2
-    generalize h: r.expr = expr
-    have proof : Q($g1 ⊚ $f2 = $expr) := r.proof
-    exact {
-      expr := q($f1 ⊚ $r.expr),
-      val  := .Cons Z f1 q($r.expr) atom r.val,
-      proof:= show Q($f1 ⊚ $expr = ($f1 ⊚ $g1) ⊚ $f2) from q(by
-        simp
-        rw [«$proof»]
-      )
-    }
-
-
-def Morphism.compose {X Y Z: Q($C)} (f1: Q($Y ⟶  $Z)) (f2: Q($X ⟶  $Y))
-  (l1: @Morphism _ _ C CatC Y Z f1) (l2: @Morphism _ _ C CatC X Y f2) :
-  @Result _ q($X ⟶  $Z) (@Morphism _ _ C CatC X Z) q($f1 ⊚ $f2) :=
-by
-  cases l1 with
-  | Id =>
-    apply Result.mk
-    case expr =>
-      exact f2
-    case val =>
-      exact l2
-    case proof =>
-      exact q(by
-        rw [Category.id_comp]
-      )
-  | List _ a =>
-    cases l2 with
-    | Id =>
-      apply Result.mk
-      case expr =>
-        exact f1
-      case val =>
-        exact (.List _ a)
-      case proof =>
-        exact q(by
-          rw [Category.comp_id]
+def Morphism.compose {X Y Z: Q($C)} (f1:Q($Y ⟶  $Z)) (f2:Q($X ⟶  $Y))
+  (l1:Morphism Y Z f1) (l2:Morphism X Y f2) :
+    @Result _ q($X ⟶  $Z) (@Morphism _ _ C CatC X Z) q($f1 ⊚ $f2) :=
+    match (l1, l2) with
+    | (l1, Morphism.Nil (Atom.Id _)) =>
+      {
+        expr  := f1,
+        val   := l1,
+        proof := q(by
+          simp
         )
-    | List _ b =>
-      apply Result.map (AtomicMorphism.compose f1 f2 a b)
-      apply Morphism.List
-
-#check @Category.id
-#check Category.comp
-#check Morphism.compose
+      }
+    | (Morphism.Nil (Atom.Id _), l2) =>
+      {
+        expr  := f2,
+        val   := l2,
+        proof := q(by
+          simp
+        )
+      }
+    | (Morphism.Nil atom, l2) =>
+      {
+        expr  := q($f1 ⊚ $f2),
+        val   := Morphism.Cons Y f1 f2 atom l2
+        proof := q(by simp)
+      }
+    | (Morphism.Cons Z f1 g1 atom l1, l2) =>
+      match compose g1 f2 l1 l2 with
+      | Result.mk expr val proof =>
+        {
+          expr  := q($f1 ⊚ $expr)
+          val   := Morphism.Cons Z f1 expr atom val,
+          proof := q(by
+            simp only [«$proof», Category.assoc]
+          )
+       }
 
 
 
@@ -149,7 +126,7 @@ partial def match_morphism_dom_eq_cod (X: Q($C)) (f:Q($X ⟶  $X)) :
 
   match f with
   | ~q(𝟙 «$X») => do
-    return {expr := q(𝟙 $X), val := Morphism.Id X, proof := q(by rfl)}
+    return {expr := q(𝟙 $X), val := Morphism.Nil (Atom.Id X), proof := q(by rfl)}
   | ~q(@Category.comp _ _ _ «$X» _ $g $h) => do
     let r1 ← @match_morphism_dom_eq_cod X g
     let r2 ← match_morphism_dom_eq_cod X h
@@ -182,7 +159,7 @@ partial def match_morphism_dom_eq_cod (X: Q($C)) (f:Q($X ⟶  $X)) :
         }
   | _ =>
     let idx ← CatM.add_atom f
-    return Result.Id f <| Morphism.List f <| AtomicMorphism.Nil (Atom.Const X X f idx)
+    return Result.Id f <| Morphism.Nil (Atom.Const X X f idx)
 
 
 
@@ -238,7 +215,7 @@ partial def match_morphism (X Y: Q($C)) (f:Q($X ⟶  $Y)) :
         }
   | _ =>
     let idx ← CatM.add_atom f
-    return Result.Id f <| Morphism.List f <| AtomicMorphism.Nil (Atom.Const X Y f idx)
+    return Result.Id f <| Morphism.Nil (Atom.Const X Y f idx)
 
 end
 
