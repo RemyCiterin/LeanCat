@@ -225,6 +225,14 @@ def of_eq (_ : (a: R) = c) (_ : b = c) : a = b := by simp only [*]
 
 universe w
 
+def TestEq (α:Q(Type w)) (X Y:Q($α)) : MetaM <| Option Q($X = $Y) := do
+  if ← isDefEq X Y then do
+    let p : Q($X = $X) := q(by rfl)
+    let proof : Q(«$X» = «$Y») := p
+    return some proof
+  else return none
+#check TestEq
+
 abbrev EndoHom (C:Type w) (CatC:Category C) (X:C) := @Category.Hom C CatC X X
 
 partial def match_morphism_equality (mvarid:MVarId) : CatM <| List MVarId := do
@@ -252,15 +260,13 @@ partial def match_morphism_equality (mvarid:MVarId) : CatM <| List MVarId := do
       let ⟨f', vf, pf⟩ ← @match_morphism_dom_eq_cod u v C CatC X f
       let ⟨g', vg, pg⟩ ← @match_morphism_dom_eq_cod u v C CatC X g
 
-      --throwError "{f'} {g'}"
-
-      if not (← isDefEq f' g') then do
-        throwError "expressions not equal\n{f}\n{g}\n{f'}\n{g'}"
-
-      let pg : Q(«$g» = «$f'») := pg
-      mvarid.assign q(of_eq $pf $pg)
-
-      return []
+      match ← @TestEq v q($X ⟶  $X) f' g' with
+      | none => throwError "expressions not equal\n{f}\n{g}\n{f'}\n{g'}"
+      | some proof => do
+        mvarid.assign <| show Q($f = $g) from q(by
+            simp [«$pg», «$pf», «$proof»]
+          )
+        return []
 
     | ~q(@Category.Hom $C $CatC $X $Y) =>
 
@@ -273,14 +279,13 @@ partial def match_morphism_equality (mvarid:MVarId) : CatM <| List MVarId := do
       let ⟨f', vf, pf⟩ ← @match_morphism u v C CatC X Y f
       let ⟨g', vg, pg⟩ ← @match_morphism u v C CatC X Y g
 
-
-      if not (← isDefEq f' g') then do
-        throwError "expressions not equal\n{f}\n{g}\n{f'}\n{g'}"
-
-      let pg : Q(«$g» = «$f'») := pg
-      mvarid.assign q(of_eq $pf $pg)
-
-      return []
+      match ← @TestEq v q($X ⟶  $Y) f' g' with
+      | none => throwError "expressions not equal\n{f}\n{g}\n{f'}\n{g'}"
+      | some proof => do
+        mvarid.assign <| show Q($f = $g) from q(by
+            simp [«$pg», «$pf», «$proof»]
+          )
+        return []
 
     | _ => throwError "not a morphism"
   | _ => throwError "not an equality"
