@@ -1,7 +1,10 @@
 import Qq
 import Lean
 
+import Lean.Data.RBMap
+import Lean.Data.RBTree
 import Category.Basic
+import Category.UnionFind
 
 open Lean Lean.Expr Lean.Meta Lean.Elab.Tactic
 
@@ -28,21 +31,88 @@ def Result.map {α:Q(Type u)} {E:Q($α) → Type} {e: Q($α)}
 instance [Inhabited (Σ e, E e)] : Inhabited (Result E e) :=
   let ⟨e', v⟩ : Σ e, E e := default; ⟨e', v, default⟩
 
+section
+
+variable (α:Q(Sort u))
+
+inductive QEquality (x y:Q($α)) : Prop where
+| intro : Q($x = $y) → QEquality x y
+
+def QEquivalence : Equivalence (QEquality α) where
+  refl := by
+    intro x
+    apply QEquality.intro
+    exact q(by rfl)
+
+  symm := by
+    intro x y xy
+    cases xy with
+    | intro eq =>
+      apply QEquality.intro
+      exact q(Eq.symm «$eq»)
+
+  trans := by
+    intro x y z xy yz
+    cases xy
+    cases yz
+    case intro.intro xy yz =>
+      apply QEquality.intro
+      exact q(Eq.trans «$xy» «$yz»)
+
+def QSetoid : Setoid Q($α) where
+  r := QEquality α
+  iseqv := QEquivalence α
+
+instance {α:Q(Sort u)} : Setoid Q($α) := QSetoid α
+
+-- lean doesn't infer the instance, I don't know why, probably because of level inference
+instance {C:Q(Type u)} {_:Q(Category.{u, v} $C)} {X Y:Q($C)} :
+  Setoid Q($X ⟶  $Y) := @QSetoid (Level.succ v) q($X ⟶  $Y)
+
+end
+
 namespace Cat
 
 structure Context where
   useTransparancy : Bool
 
+#print Ordering
+
+def Nat.cmp (x y:Nat) : Ordering :=
+  if x < y then Ordering.lt else if y < x then Ordering.gt else Ordering.eq
+
+def PairNat.cmp (p₁ p₂:Nat × Nat) : Ordering :=
+  match Nat.cmp p₁.fst p₂.fst with
+  | Ordering.eq =>
+    Nat.cmp p₁.snd p₂.snd
+  | o => o
+
 structure State where
   atoms : Array Expr := #[]
+  u : Level := Level.zero
+  v : Level := Level.zero
+  C : Q(Type u)
+  inst : Q(Category.{u, v} $C)
+  obj : Array Q($C)
+  arrow : RBMap (Nat × Nat) (
+    Σ
+      (X Y:Q($C))
+      (size:Nat)
+      (vec: Vector Q($X ⟶  $Y) size),
+      Option <| UnionFind size vec
+  ) PairNat.cmp
+
 
 instance : Inhabited State where
-  default := ⟨#[]⟩
+  default := ⟨#[], Level.succ Level.zero, Level.zero, q(Type), q(inferInstanceAs (Category Type)), #[], RBMap.empty⟩
 
 abbrev CatM := ReaderT Context <| StateT State MetaM
 
 def CatM.run {α:Type} (f:CatM α) (red:Bool) :
-  MetaM α := (f ⟨red⟩).run' {}
+  MetaM α := (f ⟨red⟩).run' default
+
+#check inferType
+#check @Category.Hom
 
 def CatM.add_atom (e:Expr) : CatM Nat := do
   let table ← get
@@ -52,6 +122,66 @@ def CatM.add_atom (e:Expr) : CatM Nat := do
       if ← isDefEq e table.atoms[i] then
         return i
   modifyGet fun c => (table.atoms.size, {c with atoms := c.atoms.push e})
+
+def CatM.add_obj (e:Expr) : CatM Nat := do
+  let table ← get
+  for h : i in [0:table.obj.size] do
+      have : i < table.obj.size := h.2
+      if ← isDefEq e table.obj[i] then
+        return i
+  modifyGet fun c => (table.obj.size, {c with obj := c.obj.push e})
+
+
+def CatM.match_arrow (f:Expr) : CatM (Expr × Expr) := do
+  let state ← get
+  match state with
+  | State.mk _ _ v C _ _ _ =>
+    let type_f : Expr ← whnf (← inferType f)
+    have type_f : Q(Type v) := type_f
+    match type_f with
+    | ~q(@Category.Hom «$C» _ $X $Y) =>
+      return (X, Y)
+    | _ =>
+      throwError "match_arrow: not a morphism"
+
+
+def CatM.add_arrow (domIdx codIdx:Nat) (f:Expr) : CatM Unit := do
+  let state ← get
+  match state with
+  | State.mk atoms u v C _ obj arrow =>
+    match RBMap.find? arrow (domIdx, codIdx) with
+    | some ⟨X, Y, size, vec, none⟩ =>
+      let (X', Y') ← match_arrow f
+
+      if not (← isDefEq X X') then throwError "add_arrow: bad domain"
+      if not (← isDefEq Y Y') then throwError "add_arrow: bad codomain"
+
+      have f : Q($X ⟶  $Y) := f
+
+      for h : i  in [0:size] do
+        have : i < size := h.2
+        if ← isDefEq f vec[i] then return ()
+
+      modify fun _ => ⟨atoms, u, v, C, _, obj,
+        /- *** force the reference counting of vec to 1 *** -/
+        let arrow := arrow.insert (domIdx, codIdx) ⟨X, Y, 0, ⟨#[], by simp⟩, none⟩
+        let vec: Vector Q($X ⟶  $Y) (Nat.succ size) := vec.push f
+        arrow.insert (domIdx, codIdx) ⟨X, Y, Nat.succ size, vec, none⟩
+      ⟩
+    | none =>
+      let some X := obj.get? domIdx | throwError "out of bound"
+      let some Y := obj.get? codIdx | throwError "out of bound"
+      let (X', Y') ← match_arrow f
+
+      if not (← isDefEq X X') then throwError "add_arrow: bad domain"
+      if not (← isDefEq Y Y') then throwError "add_arrow: bad codomain"
+
+      have X : Q($C) := X; have Y : Q($C) := Y
+      have f : Q($X ⟶  $Y) := f
+
+      modify fun _ => ⟨atoms, u, v, C, _, obj, arrow.insert (domIdx, codIdx) ⟨X, Y, 1, ⟨#[f], by simp⟩, none⟩⟩
+    | _ =>
+      throwError "add_arrow: the unin find shound be empty"
 
 section
 
@@ -219,6 +349,7 @@ partial def match_morphism (X Y: Q($C)) (f:Q($X ⟶  $Y)) :
 
 end
 
+
 end
 
 def of_eq (_ : (a: R) = c) (_ : b = c) : a = b := by simp only [*]
@@ -227,11 +358,10 @@ universe w
 
 def TestEq (α:Q(Type w)) (X Y:Q($α)) : MetaM <| Option Q($X = $Y) := do
   if ← isDefEq X Y then do
-    let p : Q($X = $X) := q(by rfl)
-    let proof : Q(«$X» = «$Y») := p
+    have p : Q($X = $X) := q(by rfl)
+    have proof : Q(«$X» = «$Y») := p
     return some proof
   else return none
-#check TestEq
 
 abbrev EndoHom (C:Type w) (CatC:Category C) (X:C) := @Category.Hom C CatC X X
 
@@ -253,18 +383,17 @@ partial def match_morphism_equality (mvarid:MVarId) : CatM <| List MVarId := do
 
       let .sort (.succ u) ← whnf (← inferType C) | throwError "a category shound be a type"
 
-      let type_fg : Q(Type v) := q($X ⟶  $X)
-      have f : Q($type_fg) := f
-      have g : Q($type_fg) := g
+      have f : Q($X ⟶  $X) := f
+      have g : Q($X ⟶  $X) := g
 
-      let ⟨f', vf, pf⟩ ← @match_morphism_dom_eq_cod u v C CatC X f
-      let ⟨g', vg, pg⟩ ← @match_morphism_dom_eq_cod u v C CatC X g
+      let ⟨f', _, pf⟩ ← @match_morphism_dom_eq_cod u v C CatC X f
+      let ⟨g', _, pg⟩ ← @match_morphism_dom_eq_cod u v C CatC X g
 
       match ← @TestEq v q($X ⟶  $X) f' g' with
       | none => throwError "expressions not equal\n{f}\n{g}\n{f'}\n{g'}"
       | some proof => do
         mvarid.assign <| show Q($f = $g) from q(by
-            simp [«$pg», «$pf», «$proof»]
+            simp only [«$pg», «$pf», «$proof»]
           )
         return []
 
@@ -272,18 +401,17 @@ partial def match_morphism_equality (mvarid:MVarId) : CatM <| List MVarId := do
 
       let .sort (.succ u) ← whnf (← inferType C) | throwError "a category shound be a type"
 
-      let type_fg : Q(Type v) := q($X ⟶  $Y)
-      have f : Q($type_fg) := f
-      have g : Q($type_fg) := g
+      have f : Q($X ⟶  $Y) := f
+      have g : Q($X ⟶  $Y) := g
 
-      let ⟨f', vf, pf⟩ ← @match_morphism u v C CatC X Y f
-      let ⟨g', vg, pg⟩ ← @match_morphism u v C CatC X Y g
+      let ⟨f', _, pf⟩ ← @match_morphism u v C CatC X Y f
+      let ⟨g', _, pg⟩ ← @match_morphism u v C CatC X Y g
 
       match ← @TestEq v q($X ⟶  $Y) f' g' with
       | none => throwError "expressions not equal\n{f}\n{g}\n{f'}\n{g'}"
       | some proof => do
         mvarid.assign <| show Q($f = $g) from q(by
-            simp [«$pg», «$pf», «$proof»]
+            simp only [«$pg», «$pf», «$proof»]
           )
         return []
 
@@ -295,8 +423,9 @@ elab "reduce_assoc_and_id" : tactic =>
     liftMetaTactic fun mvarId => do
       CatM.run (match_morphism_equality mvarId) true
 
-end Cat
 
 example (C:Type u) [Category C] (X Y:C) (f: X ⟶  Y) (g:X ⟶  X) :
   (f ⊚ 𝟙 X) ⊚ g = 𝟙 Y ⊚ (f ⊚ g) := by reduce_assoc_and_id
 
+
+end Cat
